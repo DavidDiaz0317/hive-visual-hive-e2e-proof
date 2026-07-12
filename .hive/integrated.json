@@ -1,0 +1,64 @@
+{
+  "acmm_level": 6,
+  "allowed_auto_merge_paths": [
+    "test/**",
+    "tests/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/*_test.go"
+  ],
+  "allowed_auto_merge_risk": [
+    0
+  ],
+  "allowed_repair_paths": [
+    "src/**",
+    "**/src/**",
+    "public/**",
+    "**/public/**",
+    "index.html",
+    "**/index.html",
+    "visual-hive.config.yaml",
+    "test/**",
+    "tests/**",
+    "**/test/**",
+    "**/tests/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/*_test.go"
+  ],
+  "automation": "auto-merge",
+  "coverage": "comprehensive",
+  "default_branch": "main",
+  "max_active_issues": 5,
+  "max_repair_attempts": 4,
+  "provider": "codex",
+  "repository": "DavidDiaz0317/hive-visual-hive-e2e-proof",
+  "repository_id": "1297870867",
+  "schema_version": "hive.integrated-config.v1",
+  "test_commands": [
+    [
+      "npm",
+      "run",
+      "build"
+    ],
+    [
+      "npm",
+      "run",
+      "test"
+    ],
+    [
+      "npm",
+      "run",
+      "test:e2e"
+    ],
+    [
+      "npm",
+      "run",
+      "test:python"
+    ]
+  ],
+  "visual_hive": true,
+  "visual_hive_config_digest": "56481d4a56438a8118b25ec57bb91890b98fef28a919c446fb6331054f94b062",
+  "visual_hive_ref": "16edc8ab5737314123cbad5823e63cfff0bad386",
+  "visual_hive_repository": "DavidDiaz0317/visual-hive"
+}
