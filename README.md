@@ -20,6 +20,10 @@ The first local screenshot bootstrap is explicit:
 npm run test:e2e:update
 ```
 
+Visual Hive baselines are reviewed and platform-scoped under
+`.visual-hive/snapshots/{win32,linux}` so local Windows and hosted Linux runs
+compare only like-for-like browser rendering.
+
 Visual Hive is intentionally not referenced as a source checkout or npm dependency in this fixture. The integrated Hive installer is expected to install and pin its immutable release. Its checked-in `visual-hive.config.yaml` keeps standalone GitHub issue publishing disabled; Hive is the only intended lifecycle writer, and this initial config permits dry-run export only.
 
 ## Intentional acceptance findings
