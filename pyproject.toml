@@ -1,3 +1,17 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hive-visual-hive-e2e-proof-service"
+version = "1.0.0"
+description = "Deterministic Python metrics fixture for Hive end-to-end validation"
+requires-python = ">=3.11"
+dependencies = ["pytest==8.3.4"]
+
+[tool.setuptools]
+packages = ["service"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests_py"]
 addopts = "--strict-markers"
