@@ -1,0 +1,334 @@
+name: Hive Visual Hive Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      hive_dispatch_id:
+        description: Opaque durable Hive dispatch correlation
+        required: true
+        type: string
+
+run-name: "Hive Visual Hive Production [${{ inputs.hive_dispatch_id }}]"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: hive-visual-hive-production
+  cancel-in-progress: false
+
+jobs:
+  visual-hive-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: DavidDiaz0317/visual-hive
+          ref: 16edc8ab5737314123cbad5823e63cfff0bad386
+          path: .hive-visual-tooling
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22.23.1
+          cache: npm
+          cache-dependency-path: .hive-visual-tooling/package-lock.json
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.11"
+      - name: Build immutable Visual Hive tooling
+        working-directory: .hive-visual-tooling
+        run: npm ci && npm run build
+      - name: Move trusted tooling outside target tree
+        shell: bash
+        run: |
+          mv .hive-visual-tooling "$RUNNER_TEMP/visual-hive-tooling"
+          echo "VISUAL_HIVE_CLI=$RUNNER_TEMP/visual-hive-tooling/packages/cli/dist/index.js" >> "$GITHUB_ENV"
+      - name: Install target dependencies and matching Playwright browser
+        shell: bash
+        run: |
+          corepack_enabled=0
+          enable_corepack() {
+            if [ "$corepack_enabled" -eq 0 ]; then
+              corepack enable
+              corepack_enabled=1
+            fi
+          }
+          while IFS= read -r -d '' lockfile; do
+            package_dir="$(dirname "$lockfile")"
+            lock_count=0
+            [ -f "$package_dir/package-lock.json" ] && lock_count=$((lock_count + 1))
+            [ -f "$package_dir/pnpm-lock.yaml" ] && lock_count=$((lock_count + 1))
+            [ -f "$package_dir/yarn.lock" ] && lock_count=$((lock_count + 1))
+            if [ "$lock_count" -ne 1 ]; then
+              echo "Package scope $package_dir must contain exactly one supported lockfile" >&2
+              exit 1
+            fi
+          done < <(find . \( -name package-lock.json -o -name pnpm-lock.yaml -o -name yarn.lock \) -not -path '*/node_modules/*' -not -path './.git/*' -print0 | sort -z)
+          while IFS= read -r -d '' lockfile; do
+            npm --prefix "$(dirname "$lockfile")" ci
+          done < <(find . -name package-lock.json -not -path '*/node_modules/*' -not -path './.git/*' -print0 | sort -z)
+          while IFS= read -r -d '' lockfile; do
+            enable_corepack
+            package_dir="$(dirname "$lockfile")"
+            (cd "$package_dir" && pnpm install --frozen-lockfile)
+          done < <(find . -name pnpm-lock.yaml -not -path '*/node_modules/*' -not -path './.git/*' -print0 | sort -z)
+          while IFS= read -r -d '' lockfile; do
+            enable_corepack
+            package_dir="$(dirname "$lockfile")"
+            yarn_version="$(cd "$package_dir" && yarn --version)"
+            yarn_major="${yarn_version%%.*}"
+            if ! [[ "$yarn_major" =~ ^[0-9]+$ ]]; then
+              echo "Could not determine Yarn major version for $package_dir" >&2
+              exit 1
+            fi
+            if [ "$yarn_major" -ge 2 ]; then
+              (cd "$package_dir" && yarn install --immutable)
+            else
+              (cd "$package_dir" && yarn install --frozen-lockfile)
+            fi
+          done < <(find . -name yarn.lock -not -path '*/node_modules/*' -not -path './.git/*' -print0 | sort -z)
+          has_ancestor_package_lock() {
+            local candidate="$1"
+            node - "$candidate" <<'NODE'
+          const fs = require("fs");
+          const path = require("path");
+          const root = fs.realpathSync(process.cwd());
+          const target = fs.realpathSync(process.argv[2]);
+          const locks = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"];
+
+          function patternsFor(scope) {
+            const patterns = [];
+            try {
+              const manifest = JSON.parse(fs.readFileSync(path.join(scope, "package.json"), "utf8"));
+              if (Array.isArray(manifest.workspaces)) patterns.push(...manifest.workspaces);
+              if (manifest.workspaces && Array.isArray(manifest.workspaces.packages)) patterns.push(...manifest.workspaces.packages);
+            } catch (_) {}
+            try {
+              const lines = fs.readFileSync(path.join(scope, "pnpm-workspace.yaml"), "utf8").split(/\r?\n/);
+              let inPackages = false;
+              for (const line of lines) {
+                const inline = line.match(/^\s*packages\s*:\s*\[(.*)\]\s*$/);
+                if (inline) {
+                  for (const value of inline[1].split(",")) patterns.push(value.trim().replace(/^['"]|['"]$/g, ""));
+                  inPackages = false;
+                  continue;
+                }
+                if (/^\s*packages\s*:\s*$/.test(line)) {
+                  inPackages = true;
+                  continue;
+                }
+                if (inPackages && /^\S/.test(line)) inPackages = false;
+                if (inPackages) {
+                  const item = line.match(/^\s*-\s*(['"]?)(.*?)\1\s*(?:#.*)?$/);
+                  if (item && item[2]) patterns.push(item[2]);
+                }
+              }
+            } catch (_) {}
+            return patterns;
+          }
+
+          function globExpression(pattern) {
+            pattern = pattern.split(String.fromCharCode(92)).join("/").replace(/^\.\//, "").replace(/^\/+|\/+$/g, "");
+            let source = "^";
+            for (let index = 0; index < pattern.length; index += 1) {
+              const character = pattern[index];
+              if (character === "*") {
+                if (pattern[index + 1] === "*") {
+                  index += 1;
+                  if (pattern[index + 1] === "/") {
+                    index += 1;
+                    source += "(?:.*/)?";
+                  } else {
+                    source += ".*";
+                  }
+                } else {
+                  source += "[^/]*";
+                }
+              } else if (character === "?") {
+                source += "[^/]";
+              } else {
+                if (".+()|[]{}^$".includes(character)) source += "\\";
+                source += character;
+              }
+            }
+            return new RegExp(source + "$");
+          }
+
+          function owns(scope) {
+            const relative = path.relative(scope, target).split(path.sep).join("/");
+            let matched = false;
+            for (let pattern of patternsFor(scope)) {
+              pattern = String(pattern).trim().split(String.fromCharCode(92)).join("/");
+              const excluded = pattern.startsWith("!");
+              if (excluded) pattern = pattern.slice(1);
+              if (pattern && globExpression(pattern).test(relative)) matched = !excluded;
+            }
+            return matched;
+          }
+
+          function insideRoot(value) {
+            const relative = path.relative(root, value);
+            return relative === "" || (relative !== ".." && !relative.startsWith(".." + path.sep));
+          }
+
+          let scope = target;
+          while (insideRoot(scope)) {
+            const hasLock = locks.some((name) => fs.existsSync(path.join(scope, name)));
+            if (hasLock && (scope === target || owns(scope))) process.exit(0);
+            if (scope === root) break;
+            const parent = path.dirname(scope);
+            if (parent === scope) break;
+            scope = parent;
+          }
+          process.exit(1);
+          NODE
+          }
+          lockless_package_dirs=()
+          while IFS= read -r -d '' manifest; do
+            package_dir="$(dirname "$manifest")"
+            if has_ancestor_package_lock "$package_dir"; then
+              continue
+            fi
+            lockless_package_dirs+=("$package_dir")
+          done < <(find . -name package.json -not -path '*/node_modules/*' -not -path './.git/*' -not -path '*/dist/*' -not -path '*/build/*' -not -path '*/coverage/*' -not -path '*/vendor/*' -not -path './.visual-hive/*' -print0 | sort -z)
+          for package_dir in "${lockless_package_dirs[@]}"; do
+            npm --prefix "$package_dir" install
+          done
+          if [ -f pyproject.toml ]; then
+            python -m pip install -e .
+          elif [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          fi
+          tooling_playwright="$RUNNER_TEMP/visual-hive-tooling/node_modules/@playwright/test/cli.js"
+          node "$tooling_playwright" install --with-deps chromium
+          while IFS= read -r -d '' playwright_cli; do
+            node "$playwright_cli" install chromium
+          done < <(find . -path '*/node_modules/@playwright/test/cli.js' -not -path './.git/*' -print0 | sort -z)
+      - name: Run complete deterministic production scan
+        shell: bash
+        run: |
+          mkdir -p .visual-hive
+          repository_exit=0
+          printf '1\n' > .visual-hive/pipeline-exit-code.txt
+          printf '1\n' > .visual-hive/repository-test-exit-code.txt
+          : > .visual-hive/repository-tests.tsv
+          run_repository_test() {
+            set +e
+            "$@"
+            command_exit=$?
+            set -e
+            printf '%s\t%s\n' "$command_exit" "$*" >> .visual-hive/repository-tests.tsv
+            if [ "$command_exit" -ne 0 ] && [ "$repository_exit" -eq 0 ]; then
+              repository_exit=$command_exit
+            fi
+            return 0
+          }
+          run_repository_test npm run build
+          run_repository_test npm run test
+          run_repository_test npm run test:e2e
+          run_repository_test npm run test:python
+          printf '%s\n' "$repository_exit" > .visual-hive/repository-test-exit-code.txt
+          set +e
+          node "$VISUAL_HIVE_CLI" pipeline --config visual-hive.config.yaml --mode full --ci --continue-on-error --skip-install --github-step-summary
+          pipeline_exit=$?
+          set -e
+          printf '%s\n' "$pipeline_exit" > .visual-hive/pipeline-exit-code.txt
+          echo "Visual Hive deterministic pipeline exit: $pipeline_exit"
+          node "$VISUAL_HIVE_CLI" issues --config visual-hive.config.yaml --write
+          # Writes .visual-hive/baselines.json before artifact upload.
+          node "$VISUAL_HIVE_CLI" baselines list --config visual-hive.config.yaml --write
+          node "$VISUAL_HIVE_CLI" hive integration-smoke --config visual-hive.config.yaml --mode measured
+          node <<'NODE'
+          const fs = require("fs");
+          const candidates = [".visual-hive/plan.full.json", ".visual-hive/plan.json"];
+          const planPath = candidates.find(fs.existsSync);
+          const plan = planPath ? JSON.parse(fs.readFileSync(planPath, "utf8")) : {};
+          const rows = Array.isArray(plan.items) ? plan.items : [];
+          const layerPath = ".visual-hive/testing-layers.json";
+          const layerReport = fs.existsSync(layerPath) ? JSON.parse(fs.readFileSync(layerPath, "utf8")) : {};
+          const layers = Array.isArray(layerReport.layers) ? layerReport.layers : [];
+          const systemScopes = [
+            ["workflow-safety", ".visual-hive/workflows.json"],
+            ["provider-governance", ".visual-hive/provider-results.json"]
+          ].filter(([, artifact]) => fs.existsSync(artifact)).map(([scope]) => scope);
+          const ids = [...new Set([
+            ...rows.map((item) => item.contractId || item.id),
+            ...layers.map((layer) => Number.isInteger(layer.id) ? "testing-layer:" + layer.id : null),
+            ...systemScopes
+          ].filter(Boolean))].sort();
+          fs.writeFileSync(".visual-hive/evaluated-contracts.txt", ids.join("\n") + "\n");
+          NODE
+      - name: Upload independently verifiable evidence
+        id: evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: visual-hive-evidence-${{ github.run_id }}
+          path: |
+            .visual-hive
+            !.visual-hive/bundles/**
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+      - name: Build Hive lifecycle bundle bound to evidence artifact
+        shell: bash
+        env:
+          VISUAL_HIVE_WORKFLOW_ARTIFACT_ID: ${{ steps.evidence.outputs.artifact-id }}
+        run: |
+          args=()
+          while IFS= read -r contract; do
+            if [ -n "$contract" ]; then args+=(--evaluated-contract "$contract"); fi
+          done < .visual-hive/evaluated-contracts.txt
+          resolution_args=()
+          repository_exit="$(cat .visual-hive/repository-test-exit-code.txt 2>/dev/null || printf '1')"
+          if [[ "$repository_exit" =~ ^[0-9]+$ ]] && [ "$repository_exit" -eq 0 ]; then
+            resolution_args+=(--authoritative-for-resolution)
+          else
+            echo "Repository test plan was incomplete; bundle cannot resolve absent findings" >&2
+          fi
+          node "$VISUAL_HIVE_CLI" hive bundle --config visual-hive.config.yaml --issues .visual-hive/issues.json --acmm-request 6 --scan-scope full "${resolution_args[@]}" "${args[@]}"
+      - name: Upload trusted Hive bundle
+        id: bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: visual-hive-bundle-${{ github.run_id }}
+          path: .visual-hive/bundles
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+
+  # GitHub allows an App-bound context to become required only after that
+  # context has completed successfully in the repository within seven days. This
+  # seed uses the future PR context, but actively fails on every non-default or
+  # stale dispatch. Hive independently verifies both jobs before protection.
+  visual-hive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Reject a non-default production dispatch
+        shell: bash
+        env:
+          HIVE_EVENT_NAME: ${{ github.event_name }}
+          HIVE_REF: ${{ github.ref }}
+          HIVE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          test "$HIVE_EVENT_NAME" = "workflow_dispatch"
+          test "$HIVE_REF" = "refs/heads/$HIVE_DEFAULT_BRANCH"
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify dispatch SHA is the current default head
+        shell: bash
+        env:
+          HIVE_DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HIVE_DISPATCH_SHA"
