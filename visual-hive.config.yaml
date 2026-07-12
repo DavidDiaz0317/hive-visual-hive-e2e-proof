@@ -1,0 +1,175 @@
+project:
+  name: hive-visual-hive-e2e-proof
+  type: react-vite
+  defaultBranch: main
+  setupProfile: free-local
+
+targets:
+  localPreview:
+    kind: command
+    install: "npm ci"
+    build: "npm run build"
+    serve: "npm run preview"
+    url: "http://127.0.0.1:4317"
+    prSafe: true
+    schedule: "17 */6 * * *"
+    cost: cheap
+
+contracts:
+  - id: dashboard-shell
+    description: Dashboard API metrics and the operator shell remain available and visually stable.
+    target: localPreview
+    severity: high
+    runOn:
+      pullRequest: true
+      schedule: true
+    waitFor:
+      - selector: "[data-testid='metric-grid']"
+        state: visible
+        timeoutMs: 5000
+    # This initial acceptance contract intentionally omits API failure and
+    # hidden-status assertions so the mapped api-500 mutation can survive.
+    failOnConsoleError: false
+    expectedConsoleErrors: []
+    steps:
+      - action: goto
+        route: "/"
+        description: Open the fleet overview.
+      - action: assertVisible
+        selector: "[data-testid='metric-grid']"
+        description: The deterministic metric grid is visible.
+      - action: assertText
+        selector: "[data-testid='metric-grid']"
+        text: "GPU utilization"
+        description: The key utilization metric is rendered.
+    selectors:
+      mustExist:
+        - "[data-testid='dashboard-page']"
+        - "[data-testid='metric-grid']"
+        - "[data-testid='critical-action-button']"
+      textMustExist:
+        - "Compute health at a glance"
+        - "GPU utilization"
+        - "Review jobs"
+    screenshots:
+      - name: dashboard-desktop
+        route: "/"
+        viewport: desktop
+        fullPage: false
+
+  - id: jobs-route
+    description: Jobs route exposes the stable workload queue and its expected records.
+    target: localPreview
+    severity: high
+    runOn:
+      pullRequest: true
+      schedule: true
+    waitFor:
+      - selector: "[data-testid='jobs-table']"
+        state: visible
+        timeoutMs: 5000
+    failOnConsoleError: true
+    expectedConsoleErrors: []
+    steps:
+      - action: goto
+        route: "/jobs"
+        description: Open the workload queue.
+      - action: assertVisible
+        selector: "[data-testid='jobs-table']"
+        description: The queue table is visible.
+      - action: assertText
+        selector: "[data-testid='jobs-table']"
+        text: "Climate ensemble"
+        description: The deterministic first workload is present.
+    selectors:
+      mustExist:
+        - "[data-testid='jobs-page']"
+        - "[data-testid='jobs-table']"
+      textMustExist:
+        - "Workload jobs"
+        - "Climate ensemble"
+        - "Materials model"
+    screenshots:
+      - name: jobs-desktop
+        route: "/jobs"
+        viewport: desktop
+        fullPage: false
+
+viewports:
+  desktop:
+    width: 1280
+    height: 800
+
+visual:
+  maxDiffPixelRatio: 0.01
+  updateSnapshots: false
+  failOnMissingBaselineInCI: true
+  baselinePlatform: shared
+  snapshotDir: ".visual-hive/snapshots"
+  artifactDir: ".visual-hive/artifacts"
+
+selection:
+  changedFiles:
+    - pattern: "src/**"
+      contracts:
+        - dashboard-shell
+        - jobs-route
+      risk: high
+
+mutation:
+  enabled: true
+  runOn:
+    pullRequest: false
+    schedule: true
+  minScore: 0.8
+  operators:
+    - id: api-500
+      contracts:
+        - dashboard-shell
+
+ai:
+  enabled: false
+  provider: none
+  model: offline-heuristics
+  neverSoleOracle: true
+  createIssuePrompt: true
+  maxDailyRuns: 5
+  maxPromptTokens: 20000
+  maxEstimatedCostUsd: 0
+
+integrations:
+  hive:
+    enabled: true
+    mode: dry_run
+    acmmLevel: 1
+    defaultActor: quality
+    labels:
+      - visual-hive
+      - hive/quality
+      - ai-ready
+    repair:
+      enabled: false
+      prOnly: true
+      maxAttempts: 1
+      requireHumanReview: true
+      rerunVisualHive: true
+
+costPolicy:
+  maxExternalScreenshotsPerRun: 0
+  maxMonthlyExternalScreenshots: 0
+  externalUpload:
+    pullRequest: false
+    schedule: false
+    manual: false
+    canary: false
+    mutation: false
+    full: false
+    onFailureOnly: true
+    criticalContractsOnly: true
+
+github:
+  enabled: false
+  issueLabels:
+    - visual-hive
+    - test-failure
+  commentMarker: "<!-- visual-hive-report -->"

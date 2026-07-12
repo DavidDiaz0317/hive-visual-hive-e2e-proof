@@ -1,0 +1,13 @@
+node_modules/
+dist/
+playwright-report/
+test-results/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Visual Hive runtime evidence is regenerated. Reviewed snapshot baselines are
+# intentionally retained for strict deterministic runs.
+.visual-hive/*
+!.visual-hive/snapshots/
+!.visual-hive/snapshots/**
