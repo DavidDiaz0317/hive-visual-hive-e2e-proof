@@ -3,6 +3,10 @@ project:
   type: react-vite
   defaultBranch: main
   setupProfile: free-local
+  # Preserve this fixture's deliberate domain contracts when Hive applies a
+  # deeper coverage profile; future changes remain reviewable through setup PRs.
+  hiveManagedBy: hive-integrated
+  hiveConfigOrigin: existing
 
 targets:
   localPreview:
